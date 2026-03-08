@@ -72,21 +72,84 @@ def init_session_state() -> None:
 
 
 def _configured_api_keys() -> Dict[str, str]:
-    try:
-        secret_google_api = str(st.secrets.get("GOOGLE_API_KEY", ""))
-    except Exception:
-        secret_google_api = ""
-    try:
-        secret_usda_api = str(st.secrets.get("USDA_CALORIE_API_KEY", ""))
-    except Exception:
-        secret_usda_api = ""
+    secret_candidates_google = [
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_AI_STUDIO_API_KEY",
+    ]
+    secret_candidates_usda = [
+        "USDA_CALORIE_API_KEY",
+        "USDA_API_KEY",
+    ]
+    env_candidates_google = [
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_AI_STUDIO_API_KEY",
+        "GEMINI_API_TOKEN",
+    ]
+    env_candidates_usda = [
+        "USDA_CALORIE_API_KEY",
+        "USDA_API_KEY",
+        "USDA_FOODDATA_KEY",
+    ]
 
-    env_google_api = os.getenv("GOOGLE_API_KEY", "")
-    env_usda_api = os.getenv("USDA_CALORIE_API_KEY", "")
+    secret_google_api = ""
+    google_api_source = ""
+    for key in secret_candidates_google:
+        try:
+            value = str(st.secrets.get(key, "")).strip()
+        except Exception:
+            value = ""
+        if value:
+            secret_google_api = value
+            google_api_source = f"secret:{key}"
+            break
+
+    secret_usda_api = ""
+    usda_api_source = ""
+    for key in secret_candidates_usda:
+        try:
+            value = str(st.secrets.get(key, "")).strip()
+        except Exception:
+            value = ""
+        if value:
+            secret_usda_api = value
+            usda_api_source = f"secret:{key}"
+            break
+
+    env_google_api = ""
+    for key in env_candidates_google:
+        value = os.getenv(key, "").strip()
+        if value:
+            env_google_api = value
+            google_api_source = f"env:{key}" if not google_api_source else google_api_source
+            break
+
+    env_usda_api = ""
+    for key in env_candidates_usda:
+        value = os.getenv(key, "").strip()
+        if value:
+            env_usda_api = value
+            usda_api_source = f"env:{key}" if not usda_api_source else usda_api_source
+            break
+
+    # Optional file-based fallback for deployments that mount secrets as files.
+    if not env_google_api:
+        secret_file = os.getenv("GOOGLE_API_KEY_FILE", "").strip()
+        if secret_file and os.path.exists(secret_file):
+            try:
+                with open(secret_file, "r", encoding="utf-8") as key_file:
+                    env_google_api = key_file.read().strip()
+                    if env_google_api:
+                        google_api_source = f"file:{secret_file}"
+            except Exception:
+                env_google_api = ""
 
     return {
         "google_api": (secret_google_api or env_google_api).strip(),
         "usda_api": (secret_usda_api or env_usda_api).strip(),
+        "google_api_source": google_api_source or "missing",
+        "usda_api_source": usda_api_source or "missing",
     }
 
 
@@ -843,6 +906,8 @@ def render_sidebar() -> Dict[str, str]:
             "env_calorie_api_len": len(configured_api_keys["usda_api"]),
             "env_google_api_set": bool(configured_api_keys["google_api"]),
             "env_calorie_api_set": bool(configured_api_keys["usda_api"]),
+            "google_api_source": configured_api_keys.get("google_api_source"),
+            "usda_api_source": configured_api_keys.get("usda_api_source"),
         },
     )
     # endregion
@@ -1184,6 +1249,8 @@ def main() -> None:
         data={
             "configured_google_api_len": len(configured_api_keys["google_api"]),
             "configured_usda_api_len": len(configured_api_keys["usda_api"]),
+            "configured_google_api_source": configured_api_keys.get("google_api_source"),
+            "configured_usda_api_source": configured_api_keys.get("usda_api_source"),
             "working_dir": os.getcwd(),
         },
     )
