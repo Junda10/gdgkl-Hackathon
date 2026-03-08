@@ -13,7 +13,7 @@ import streamlit as st
 
 MODEL_NAME = "gemini-2.5-flash"
 USDA_CALORIE_API_URL = "https://api.nal.usda.gov/fdc/v1/foods/search"
-DEBUG_RUN_ID = "pre_fix"
+DEBUG_RUN_ID = "post_fix"
 DEBUG_LOG_PATH = r"C:\Users\chiac\Desktop\gdgkl-Hackathon\.cursor\debug.log"
 
 
@@ -69,6 +69,25 @@ def init_session_state() -> None:
         st.session_state.food_image = None
     if "analysis_result" not in st.session_state:
         st.session_state.analysis_result = None
+
+
+def _configured_api_keys() -> Dict[str, str]:
+    try:
+        secret_google_api = str(st.secrets.get("GOOGLE_API_KEY", ""))
+    except Exception:
+        secret_google_api = ""
+    try:
+        secret_usda_api = str(st.secrets.get("USDA_CALORIE_API_KEY", ""))
+    except Exception:
+        secret_usda_api = ""
+
+    env_google_api = os.getenv("GOOGLE_API_KEY", "")
+    env_usda_api = os.getenv("USDA_CALORIE_API_KEY", "")
+
+    return {
+        "google_api": (secret_google_api or env_google_api).strip(),
+        "usda_api": (secret_usda_api or env_usda_api).strip(),
+    }
 
 
 # ─────────────────────────── helpers ─────────────────────────────────
@@ -808,15 +827,22 @@ def render_header() -> None:
 
 
 def render_sidebar() -> Dict[str, str]:
+    configured_api_keys = _configured_api_keys()
+    if "gemini_api_key" not in st.session_state:
+        st.session_state["gemini_api_key"] = configured_api_keys["google_api"]
+    if "calorie_api_key" not in st.session_state:
+        st.session_state["calorie_api_key"] = configured_api_keys["usda_api"]
+
     # region agent log
     _agent_log(
         hypothesis_id="A",
         location="app.py:render_sidebar",
         message="rendering sidebar inputs",
         data={
-            "env_google_api_set": bool(os.getenv("GOOGLE_API_KEY")),
-            "env_google_api_len": len(os.getenv("GOOGLE_API_KEY", "")),
-            "env_calorie_api_set": bool(os.getenv("USDA_CALORIE_API_KEY")),
+            "env_google_api_len": len(configured_api_keys["google_api"]),
+            "env_calorie_api_len": len(configured_api_keys["usda_api"]),
+            "env_google_api_set": bool(configured_api_keys["google_api"]),
+            "env_calorie_api_set": bool(configured_api_keys["usda_api"]),
         },
     )
     # endregion
@@ -825,7 +851,7 @@ def render_sidebar() -> Dict[str, str]:
         api_key = st.text_input(
             "Gemini API Key",
             type="password",
-            value=os.getenv("GOOGLE_API_KEY", ""),
+            value=st.session_state["gemini_api_key"],
             key="gemini_api_key",
             help="Your Google AI Studio API key.",
         )
@@ -833,9 +859,24 @@ def render_sidebar() -> Dict[str, str]:
             "USDA FoodData API Key (optional)",
             type="password",
             key="calorie_api_key",
-            value=os.getenv("USDA_CALORIE_API_KEY", ""),
+            value=st.session_state["calorie_api_key"],
             help="Improves calorie grounding. Optional.",
         )
+    # region agent log
+    _agent_log(
+        hypothesis_id="A",
+        location="app.py:render_sidebar",
+        message="sidebar widget session sync",
+        data={
+            "widget_api_key_len": len(api_key),
+            "session_api_key_len": len(st.session_state.get("gemini_api_key", "")),
+            "widget_api_key_matches_session": api_key == st.session_state.get("gemini_api_key", ""),
+            "widget_calorie_key_len": len(calorie_api_key),
+            "session_calorie_key_len": len(st.session_state.get("calorie_api_key", "")),
+            "widget_calorie_key_matches_session": calorie_api_key == st.session_state.get("calorie_api_key", ""),
+        },
+    )
+    # endregion
     # region agent log
     _agent_log(
         hypothesis_id="A",
@@ -936,29 +977,58 @@ def render_upload_section(api_key: str, calorie_api_key: str) -> None:
         st.rerun()
 
     if analyze_clicked:
+        configured_api_keys = _configured_api_keys()
         # region agent log
         _agent_log(
             hypothesis_id="B",
             location="app.py:render_upload_section",
             message="analyze click processed",
-            data={"api_key_has_value": bool(api_key.strip()), "stored_present": bool(stored)},
+            data={
+                "api_key_has_value": bool(api_key.strip()),
+                "configured_key_len": len(configured_api_keys["google_api"]),
+                "stored_present": bool(stored),
+                "session_api_key_has_value": bool(st.session_state.get("gemini_api_key", "").strip()),
+                "session_api_key_len": len(st.session_state.get("gemini_api_key", "")),
+            },
         )
         # endregion
-        if not api_key.strip():
+        effective_api_key = (
+            api_key.strip()
+            or configured_api_keys["google_api"]
+            or st.session_state.get("gemini_api_key", "").strip()
+        )
+        # region agent log
+        _agent_log(
+            hypothesis_id="B",
+            location="app.py:render_upload_section",
+            message="effective api key selected",
+            data={
+                "widget_key_len": len(api_key),
+                "configured_key_len": len(configured_api_keys["google_api"]),
+                "session_key_len": len(st.session_state.get("gemini_api_key", "")),
+                "effective_key_len": len(effective_api_key),
+            },
+        )
+        # endregion
+        if not effective_api_key:
             # region agent log
             _agent_log(
                 hypothesis_id="B",
                 location="app.py:render_upload_section",
                 message="analysis blocked due empty api key",
-                data={"api_key_len": len(api_key)},
+                data={
+                    "api_key_len": len(api_key),
+                    "configured_key_len": len(configured_api_keys["google_api"]),
+                    "session_key_len": len(st.session_state.get("gemini_api_key", "")),
+                },
             )
             # endregion
-            st.error("Please provide a Gemini API key in the ⚙️ sidebar.")
+            st.error("No Gemini API key is configured. Set GOOGLE_API_KEY in your Cloud Run env or .env.")
             return
         with st.spinner("Analyzing your meal…"):
             try:
                 result = analyze_food_image(
-                    api_key=api_key.strip(),
+                    api_key=effective_api_key,
                     image_bytes=stored["bytes"],
                     mime_type=stored["mime_type"],
                     calorie_api_key=calorie_api_key,
@@ -1105,17 +1175,18 @@ def render_tips_card(result: Dict[str, Any]) -> None:
 # ─────────────────────────── entry point ─────────────────────────────
 
 def main() -> None:
+    load_dotenv(override=False)
+    configured_api_keys = _configured_api_keys()
     _agent_log(
         hypothesis_id="A",
         location="app.py:main",
         message="app start",
         data={
-            "env_google_api_len": len(os.getenv("GOOGLE_API_KEY", "")),
-            "env_usda_api_len": len(os.getenv("USDA_CALORIE_API_KEY", "")),
+            "configured_google_api_len": len(configured_api_keys["google_api"]),
+            "configured_usda_api_len": len(configured_api_keys["usda_api"]),
             "working_dir": os.getcwd(),
         },
     )
-    load_dotenv(override=False)
     st.set_page_config(
         page_title="Jom Makan",
         page_icon="🍽️",
