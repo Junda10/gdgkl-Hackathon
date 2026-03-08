@@ -313,25 +313,11 @@ def analyze_food_image(
     return normalized
 
 
-def render_sidebar() -> Dict[str, str]:
-    with st.sidebar:
-        st.header("Configuration")
-        api_key = st.text_input(
-            "Gemini API key (Google AI Studio)",
-            type="password",
-            value=os.getenv("GOOGLE_API_KEY", ""),
-            key="gemini_api_key",
-            help="Paste your Google AI Studio key here or set GOOGLE_API_KEY in env/.env.",
-        )
-        calorie_api_key = st.text_input(
-            "USDA FoodData Central API key (optional)",
-            type="password",
-            key="calorie_api_key",
-            value=os.getenv("USDA_CALORIE_API_KEY", ""),
-            help="Optional. Add this to improve calorie grounding in health scoring.",
-        )
-
-    return {"gemini_api_key": api_key, "calorie_api_key": calorie_api_key}
+def load_api_keys() -> Dict[str, str]:
+    return {
+        "gemini_api_key": os.getenv("GOOGLE_API_KEY", ""),
+        "calorie_api_key": os.getenv("USDA_CALORIE_API_KEY", ""),
+    }
 
 
 def render_uploader() -> Optional[dict]:
@@ -376,7 +362,7 @@ def render_analysis_button(stored_image: Optional[dict], api_key: str) -> None:
 
     if st.button("Analyze food", type="primary"):
         if not api_key.strip():
-            st.error("Please provide a Gemini API key in the sidebar or via GOOGLE_API_KEY.")
+            st.error("Please set GOOGLE_API_KEY in your .env file.")
             return
 
         with st.spinner("Analyzing your food image..."):
@@ -450,7 +436,7 @@ def main() -> None:
     st.write("Upload food photos and get a healthy score plus practical improvement tips.")
 
     init_session_state()
-    config = render_sidebar()
+    config = load_api_keys()
     stored_image = render_uploader()
     render_preview(stored_image)
     render_analysis_button(stored_image, config["gemini_api_key"])
