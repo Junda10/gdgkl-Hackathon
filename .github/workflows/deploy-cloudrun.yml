@@ -1,0 +1,106 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ vars.GCP_REGION }}
+  GAR_REPOSITORY: ${{ vars.GAR_REPOSITORY }}
+  CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+  WIF_PROVIDER: ${{ vars.WIF_PROVIDER }}
+  WIF_SERVICE_ACCOUNT: ${{ vars.WIF_SERVICE_ACCOUNT }}
+  GOOGLE_API_KEY_SECRET: google-api-key
+  USDA_CALORIE_API_KEY_SECRET: usda-calorie-api-key
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Validate required workflow variables
+        run: |
+          if [ -z "${PROJECT_ID}" ] || [ -z "${GCP_REGION}" ] || [ -z "${GAR_REPOSITORY}" ] || [ -z "${CLOUD_RUN_SERVICE}" ] || [ -z "${WIF_PROVIDER}" ] || [ -z "${WIF_SERVICE_ACCOUNT}" ]; then
+            echo "Missing required GitHub variables. Set GCP_PROJECT_ID, GCP_REGION, GAR_REPOSITORY, CLOUD_RUN_SERVICE, WIF_PROVIDER, and WIF_SERVICE_ACCOUNT."
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: access_token
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Enable required APIs and setup Artifact Registry repo
+        run: |
+          gcloud services enable \
+            artifactregistry.googleapis.com \
+            cloudbuild.googleapis.com \
+            run.googleapis.com \
+            secretmanager.googleapis.com \
+            --project="${PROJECT_ID}"
+
+          if ! gcloud artifacts repositories describe "${GAR_REPOSITORY}" \
+            --location="${GCP_REGION}" \
+            --project="${PROJECT_ID}" >/dev/null 2>&1; then
+            gcloud artifacts repositories create "${GAR_REPOSITORY}" \
+              --repository-format=docker \
+              --location="${GCP_REGION}" \
+              --project="${PROJECT_ID}" \
+              --description="Docker repository for JomMakan"
+          fi
+
+      - name: Build and push container image
+        run: |
+          IMAGE="${GCP_REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPOSITORY}/${CLOUD_RUN_SERVICE}:${GITHUB_SHA}"
+          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+          docker build -t "${IMAGE}" .
+          docker push "${IMAGE}"
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        run: |
+          GOOGLE_SECRET_FLAG="--set-secrets=GOOGLE_API_KEY=${GOOGLE_API_KEY_SECRET}:latest"
+
+          if gcloud secrets describe "${USDA_CALORIE_API_KEY_SECRET}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+            GOOGLE_SECRET_FLAG="${GOOGLE_SECRET_FLAG} --set-secrets=USDA_CALORIE_API_KEY=${USDA_CALORIE_API_KEY_SECRET}:latest"
+          fi
+
+          gcloud run deploy "${CLOUD_RUN_SERVICE}" \
+            --project "${PROJECT_ID}" \
+            --region "${GCP_REGION}" \
+            --platform managed \
+            --image "${IMAGE}" \
+            --port 8080 \
+            --allow-unauthenticated \
+            --min-instances 0 \
+            --max-instances 2 \
+            --memory 512Mi \
+            --timeout 300s \
+            ${GOOGLE_SECRET_FLAG}
+
+          SERVICE_URL="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+            --project="${PROJECT_ID}" \
+            --region="${GCP_REGION}" \
+            --format='value(status.url)')"
+          echo "service_url=${SERVICE_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Show service URL
+        run: |
+          echo "Service URL: ${{ steps.deploy.outputs.service_url }}"
